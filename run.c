@@ -13,9 +13,6 @@
     #include <unistd.h>
     #include <sys/mman.h>
 #endif
-
-#include <stdint.h>
-#include <byteswap.h>
 // ----------------------------------------------------------------------------
 // Transformer model
 
@@ -402,6 +399,15 @@ const void *a; const void *b; {
     return strcmp(((TokenIndex*)a)->str, ((TokenIndex*)b)->str);
 }
 
+int bswap_32(x)
+int x; {
+    int y = x << 24;
+    y |= (x << 8) & 0x00FF0000;
+    y |= (x >> 8) & 0x0000FF00;
+    y |= (x >> 24) & 0x000000FF;
+    return y;
+}
+
 void build_tokenizer(t, tokenizer_path, vocab_size)
 Tokenizer* t; char* tokenizer_path; int vocab_size; {
     // i should have written the vocab_size into the tokenizer file... sigh
@@ -422,7 +428,7 @@ Tokenizer* t; char* tokenizer_path; int vocab_size; {
     int len;
     for (int i = 0; i < vocab_size; i++) {
         if (fread(t->vocab_scores + i, sizeof(float), 1, file) != 1) { fprintf(stderr, "failed read\n"); exit(EXIT_FAILURE);}
-	*(uint32_t*)(void*)(t->vocab_scores + i) = bswap_32(*(uint32_t*)(void*)(t->vocab_scores + i));
+	*(int*)(void*)(t->vocab_scores + i) = bswap_32(*(int*)(void*)(t->vocab_scores + i));
         if (fread(&len, sizeof(int), 1, file) != 1) { fprintf(stderr, "failed read\n"); exit(EXIT_FAILURE); }
 	len = bswap_32(len);
         t->vocab[i] = (char *)malloc(len + 1);
