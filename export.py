@@ -31,10 +31,10 @@ from model import ModelArgs, Transformer
 # -----------------------------------------------------------------------------
 # common utilities
 
-def serialize_fp32(file, tensor):
+def serialize_fp32(file, endian, tensor):
     """ writes one fp32 tensor to file that is open in wb mode """
     d = tensor.detach().cpu().view(-1).to(torch.float32).numpy()
-    b = struct.pack(f'{len(d)}f', *d)
+    b = struct.pack(f'{endian}{len(d)}f', *d)
     file.write(b)
 
 def serialize_int8(file, tensor):
@@ -72,7 +72,7 @@ def quantize_q80(w, group_size):
 # -----------------------------------------------------------------------------
 # legacy
 
-def legacy_export(model, filepath):
+def legacy_export(model, filepath, endian):
     """ Original export of llama2.c bin files, i.e. version v0 """
     out_file = open(filepath, 'wb')
 
@@ -84,43 +84,43 @@ def legacy_export(model, filepath):
     if not shared_classifier:
         p.vocab_size = -p.vocab_size
     n_kv_heads = p.n_heads if p.n_kv_heads is None else p.n_kv_heads
-    header = struct.pack('iiiiiii', p.dim, hidden_dim, p.n_layers, p.n_heads,
+    header = struct.pack(f'{endian}iiiiiii', p.dim, hidden_dim, p.n_layers, p.n_heads,
                                     n_kv_heads, p.vocab_size, p.max_seq_len)
     out_file.write(header)
 
     # next write out the embedding weights
-    serialize_fp32(out_file, model.tok_embeddings.weight)
+    serialize_fp32(out_file, endian, model.tok_embeddings.weight)
 
     # now all the layers
     # attention weights
     for layer in model.layers:
-        serialize_fp32(out_file, layer.attention_norm.weight)
+        serialize_fp32(out_file, endian, layer.attention_norm.weight)
     for layer in model.layers:
-        serialize_fp32(out_file, layer.attention.wq.weight)
+        serialize_fp32(out_file, endian, layer.attention.wq.weight)
     for layer in model.layers:
-        serialize_fp32(out_file, layer.attention.wk.weight)
+        serialize_fp32(out_file, endian, layer.attention.wk.weight)
     for layer in model.layers:
-        serialize_fp32(out_file, layer.attention.wv.weight)
+        serialize_fp32(out_file, endian, layer.attention.wv.weight)
     for layer in model.layers:
-        serialize_fp32(out_file, layer.attention.wo.weight)
+        serialize_fp32(out_file, endian, layer.attention.wo.weight)
     # ffn weights
     for layer in model.layers:
-        serialize_fp32(out_file, layer.ffn_norm.weight)
+        serialize_fp32(out_file, endian, layer.ffn_norm.weight)
     for layer in model.layers:
-        serialize_fp32(out_file, layer.feed_forward.w1.weight)
+        serialize_fp32(out_file, endian, layer.feed_forward.w1.weight)
     for layer in model.layers:
-        serialize_fp32(out_file, layer.feed_forward.w2.weight)
+        serialize_fp32(out_file, endian, layer.feed_forward.w2.weight)
     for layer in model.layers:
-        serialize_fp32(out_file, layer.feed_forward.w3.weight)
+        serialize_fp32(out_file, endian, layer.feed_forward.w3.weight)
     # final rmsnorm
-    serialize_fp32(out_file, model.norm.weight)
+    serialize_fp32(out_file, endian, model.norm.weight)
     # freqs_cis
-    serialize_fp32(out_file, model.freqs_cos[:p.max_seq_len])
-    serialize_fp32(out_file, model.freqs_sin[:p.max_seq_len])
+    serialize_fp32(out_file, endian, model.freqs_cos[:p.max_seq_len])
+    serialize_fp32(out_file, endian, model.freqs_sin[:p.max_seq_len])
 
     # final classifier weights
     if not shared_classifier:
-        serialize_fp32(out_file, model.output.weight)
+        serialize_fp32(out_file, endian, model.output.weight)
 
     # write to binary file
     out_file.close()
@@ -129,7 +129,7 @@ def legacy_export(model, filepath):
 # -----------------------------------------------------------------------------
 # new version
 
-def version1_export(model, filepath):
+def version1_export(model, filepath, endian):
     """
     Export the model weights in full float32 .bin file to be read from C.
     This is same as legacy_export, but with a proper header.
@@ -139,14 +139,14 @@ def version1_export(model, filepath):
     out_file = open(filepath, 'wb')
     # first write out the header. the header will be 256 bytes
     # 1) write magic, which will be uint32 of "ak42" in ASCII
-    out_file.write(struct.pack('I', 0x616b3432))
+    out_file.write(struct.pack(f'{endian}I', 0x616b3432))
     # 2) write version, which will be int
-    out_file.write(struct.pack('i', version))
+    out_file.write(struct.pack(f'{endian}i', version))
     # 3) write the params, which will be 7 ints
     p = model.params
     hidden_dim = model.layers[0].feed_forward.w1.weight.shape[0]
     n_kv_heads = p.n_heads if p.n_kv_heads is None else p.n_kv_heads
-    header = struct.pack('iiiiiii', p.dim, hidden_dim, p.n_layers, p.n_heads,
+    header = struct.pack(f'{endian}iiiiiii', p.dim, hidden_dim, p.n_layers, p.n_heads,
                                     n_kv_heads, p.vocab_size, p.max_seq_len)
     out_file.write(header)
     # 4) write some other flags
@@ -173,13 +173,13 @@ def version1_export(model, filepath):
     if not shared_classifier:
         weights.append(model.output.weight)
     for w in weights:
-        serialize_fp32(out_file, w)
+        serialize_fp32(out_file, endian, w)
 
     # write to binary file
     out_file.close()
     print(f"wrote {filepath}")
 
-def version2_export(model, filepath, group_size=64):
+def version2_export(model, filepath, endian, group_size=64):
     """
     Export the model weights in Q8_0 into .bin file to be read from C.
     That is:
@@ -213,19 +213,19 @@ def version2_export(model, filepath, group_size=64):
     out_file = open(filepath, 'wb')
     # first write out the header. the header will be 256 bytes
     # 1) write magic, which will be uint32 of "ak42" in ASCII
-    out_file.write(struct.pack('I', 0x616b3432))
+    out_file.write(struct.pack(f'{endian}I', 0x616b3432))
     # 2) write version, which will be int
-    out_file.write(struct.pack('i', version))
+    out_file.write(struct.pack(f'{endian}i', version))
     # 3) write the params, which will be 7 ints
     p = model.params
     hidden_dim = model.layers[0].feed_forward.w1.weight.shape[0]
     n_kv_heads = p.n_heads if p.n_kv_heads is None else p.n_kv_heads
-    header = struct.pack('iiiiiii', p.dim, hidden_dim, p.n_layers, p.n_heads,
+    header = struct.pack(f'{endian}iiiiiii', p.dim, hidden_dim, p.n_layers, p.n_heads,
                                     n_kv_heads, p.vocab_size, p.max_seq_len)
     out_file.write(header)
     # 4) write some other flags
     out_file.write(struct.pack('B', int(shared_classifier)))
-    out_file.write(struct.pack('i', group_size)) # group size used for quantization
+    out_file.write(struct.pack(f'{endian}i', group_size)) # group size used for quantization
     pad = 256 - out_file.tell() # pad rest with zeros; tell returns current pos
     assert pad >= 0
     out_file.write(b'\0' * pad)
@@ -233,10 +233,10 @@ def version2_export(model, filepath, group_size=64):
 
     # first let's write out all the params that we are keeping in fp32: the norms
     for layer in model.layers: # attention norms
-        serialize_fp32(out_file, layer.attention_norm.weight)
+        serialize_fp32(out_file, endian, layer.attention_norm.weight)
     for layer in model.layers: # MLP norms
-        serialize_fp32(out_file, layer.ffn_norm.weight)
-    serialize_fp32(out_file, model.norm.weight) # final pre-classifier norm
+        serialize_fp32(out_file, endian, layer.ffn_norm.weight)
+    serialize_fp32(out_file, endian, model.norm.weight) # final pre-classifier norm
 
     # now let's write out all the params that we are quantizing to Q8_0
     # note we skip classifier weights, which are shared with the embedding
@@ -246,7 +246,7 @@ def version2_export(model, filepath, group_size=64):
         q, s, err = quantize_q80(w, group_size)
         # save the int8 weights to file
         serialize_int8(out_file, q) # save the tensor in int8
-        serialize_fp32(out_file, s) # save scale factors
+        serialize_fp32(out_file, endian, s) # save scale factors
         # logging
         ew.append((err, w.shape))
         print(f"{i+1}/{len(weights)} quantized {tuple(w.shape)} to Q8_0 with max error {err}")
@@ -489,7 +489,7 @@ def load_hf_model(model_path):
 # -----------------------------------------------------------------------------
 # API entrypoint
 
-def model_export(model, filepath, version, dtype=torch.float32):
+def model_export(model, filepath, version, dtype=torch.float32, endian="="):
     """
     Versions docs:
     v-1:huggingface export, i.e. intended for use outside of this repo, in HF
@@ -499,11 +499,11 @@ def model_export(model, filepath, version, dtype=torch.float32):
     # TODO: add dtype export support for other versions (?)
     """
     if version == 0:
-        legacy_export(model, filepath)
+        legacy_export(model, filepath, endian)
     elif version == 1:
-        version1_export(model, filepath)
+        version1_export(model, filepath, endian)
     elif version == 2:
-        version2_export(model, filepath)
+        version2_export(model, filepath, endian)
     elif version == -1:
         hf_export(model, filepath, dtype)
     else:
@@ -546,12 +546,14 @@ if __name__ == "__main__":
     parser.add_argument("filepath", type=str, help="the output filepath")
     parser.add_argument("--version", default=0, type=int, help="the version to export with")
     parser.add_argument("--dtype", type=str, help="dtype of the model (fp16, fp32)", default="fp32")
+    parser.add_argument("--endianness", type=str, default="native", help="endianness of output file, default=native")
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--checkpoint", type=str, help="model checkpoint, .pt file")
     group.add_argument("--meta-llama", type=str, help="meta llama model path")
     group.add_argument("--hf", type=str, help="huggingface model path")
     args = parser.parse_args()
     dtype = {"fp16": torch.float16, "fp32": torch.float32}[args.dtype]
+    endian = {"little": "<", "big": ">", "native": "="}[args.endianness]
 
     if args.checkpoint:
         model = load_checkpoint(args.checkpoint)
@@ -564,4 +566,4 @@ if __name__ == "__main__":
         parser.error("Can't load input model!")
 
     # export
-    model_export(model, args.filepath, args.version, args.dtype)
+    model_export(model, args.filepath, args.version, args.dtype, endian)
