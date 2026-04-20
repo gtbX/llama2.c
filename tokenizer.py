@@ -12,11 +12,12 @@ from sentencepiece import SentencePieceProcessor
 TOKENIZER_MODEL = "tokenizer.model" # the llama sentencepiece tokenizer model
 
 class Tokenizer:
-    def __init__(self, tokenizer_model=None):
+    def __init__(self, tokenizer_model=None, endian="="):
         model_path = tokenizer_model if tokenizer_model else TOKENIZER_MODEL
         assert os.path.isfile(model_path), model_path
         self.sp_model = SentencePieceProcessor(model_file=model_path)
         self.model_path = model_path
+        self.endian = endian
 
         # BOS / EOS token IDs
         self.n_words: int = self.sp_model.vocab_size()
@@ -64,15 +65,17 @@ class Tokenizer:
         # the tokenizer.bin file is the same as .model file, but .bin
         tokenizer_bin = self.model_path.replace('.model', '.bin')
         with open(tokenizer_bin, 'wb') as f:
-            f.write(struct.pack("I", max_token_length))
+            f.write(struct.pack(f"{self.endian}I", max_token_length))
             for bytes, score in zip(tokens, scores):
-                f.write(struct.pack("fI", score, len(bytes)))
+                f.write(struct.pack(f"{self.endian}fI", score, len(bytes)))
                 f.write(bytes)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("-t", "--tokenizer-model", type=str, help="optional path to custom tokenizer ")
+    parser.add_argument("--endianness", type=str, default="native", help="endianness of output file, default=native")
     args = parser.parse_args()
+    endian = {"little": "<", "big": ">", "native": "="}[args.endianness]
 
-    t = Tokenizer(args.tokenizer_model)
+    t = Tokenizer(args.tokenizer_model, endian)
     t.export()
