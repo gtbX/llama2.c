@@ -19,7 +19,7 @@
 // ----------------------------------------------------------------------------
 // Transformer model
 
-typedef struct {
+typedef struct Config_s {
     int dim; // transformer dimension
     int hidden_dim; // for ffn layers
     int n_layers; // number of layers
@@ -50,7 +50,7 @@ typedef struct {
     float* wcls;
 } TransformerWeights;
 
-typedef struct {
+typedef struct RunState_s {
     // current wave of activations
     float *x; // activation at current time stamp (dim,)
     float *xb; // same, but inside a residual branch (dim,)
@@ -77,7 +77,10 @@ typedef struct {
     ssize_t file_size; // size of the checkpoint file in bytes
 } Transformer;
 
-void malloc_run_state(RunState* s, Config* p) {
+void malloc_run_state(s, p)
+struct RunState_s* s;
+struct Config_s* p;
+{
     // we calloc instead of malloc to keep valgrind happy
     int kv_dim = (p->dim * p->n_kv_heads) / p->n_heads;
     s->x = calloc(p->dim, sizeof(float));
@@ -98,7 +101,9 @@ void malloc_run_state(RunState* s, Config* p) {
     }
 }
 
-void free_run_state(RunState* s) {
+void free_run_state(s)
+RunState* s;
+{
     free(s->x);
     free(s->xb);
     free(s->xb2);
@@ -111,7 +116,9 @@ void free_run_state(RunState* s) {
     free(s->value_cache);
 }
 
-void memory_map_weights(TransformerWeights *w, Config* p, float* ptr, int shared_weights) {
+void memory_map_weights(w, p, ptr, shared_weights) 
+TransformerWeights *w; Config* p; float* ptr; int shared_weights;
+{
     int head_size = p->dim / p->n_heads;
     // make sure the multiplications below are done in 64bit to fit the parameter counts of 13B+ models
     unsigned long long n_layers = p->n_layers;
@@ -142,8 +149,11 @@ void memory_map_weights(TransformerWeights *w, Config* p, float* ptr, int shared
     w->wcls = shared_weights ? w->token_embedding_table : ptr;
 }
 
-void read_checkpoint(char* checkpoint, Config* config, TransformerWeights* weights,
-                     int* fd, float** data, ssize_t* file_size) {
+void read_checkpoint(checkpoint, config, weights,
+                     fd, data, file_size)
+char* checkpoint; Config* config; TransformerWeights* weights;
+                     int* fd; float** data; ssize_t* file_size;
+		     {
     FILE *file = fopen(checkpoint, "rb");
     if (!file) { fprintf(stderr, "Couldn't open file %s\n", checkpoint); exit(EXIT_FAILURE); }
     // read in the config header
@@ -164,14 +174,16 @@ void read_checkpoint(char* checkpoint, Config* config, TransformerWeights* weigh
     memory_map_weights(weights, config, weights_ptr, shared_weights);
 }
 
-void build_transformer(Transformer *t, char* checkpoint_path) {
+void build_transformer(t, checkpoint_path)
+Transformer *t; char* checkpoint_path; {
     // read in the Config and the Weights from the checkpoint
     read_checkpoint(checkpoint_path, &t->config, &t->weights, &t->fd, &t->data, &t->file_size);
     // allocate the RunState buffers
     malloc_run_state(&t->state, &t->config);
 }
 
-void free_transformer(Transformer* t) {
+void free_transformer(t)
+Transformer* t; {
     // close the memory mapping
     if (t->data != MAP_FAILED) { munmap(t->data, t->file_size); }
     if (t->fd != -1) { close(t->fd); }
@@ -182,7 +194,8 @@ void free_transformer(Transformer* t) {
 // ----------------------------------------------------------------------------
 // neural net blocks; the dynamics of the Transformer
 
-void rmsnorm(float* o, float* x, float* weight, int size) {
+void rmsnorm(o, x, weight, size)
+float* o; float* x; float* weight; int size; {
     // calculate sum of squares
     float ss = 0.0f;
     for (int j = 0; j < size; j++) {
@@ -197,7 +210,8 @@ void rmsnorm(float* o, float* x, float* weight, int size) {
     }
 }
 
-void softmax(float* x, int size) {
+void softmax(x, size)
+float* x; int size; {
     // find max value (for numerical stability)
     float max_val = x[0];
     for (int i = 1; i < size; i++) {
@@ -217,7 +231,8 @@ void softmax(float* x, int size) {
     }
 }
 
-void matmul(float* xout, float* x, float* w, int n, int d) {
+void matmul(xout, x, w, n, d)
+float* xout; float* x; float* w; int n; int d; {
     // W (d,n) @ x (n,) -> xout (d,)
     // by far the most amount of time is spent inside this little function
     int i;
@@ -231,7 +246,8 @@ void matmul(float* xout, float* x, float* w, int n, int d) {
     }
 }
 
-float* forward(Transformer* transformer, int token, int pos) {
+float* forward(transformer, token, pos)
+Transformer* transformer; int token; int pos; {
 
     // a few convenience variables
     Config* p = &transformer->config;
@@ -381,11 +397,13 @@ typedef struct {
     unsigned char byte_pieces[512]; // stores all single-byte strings
 } Tokenizer;
 
-int compare_tokens(const void *a, const void *b) {
+int compare_tokens(a, b)
+const void *a; const void *b; {
     return strcmp(((TokenIndex*)a)->str, ((TokenIndex*)b)->str);
 }
 
-void build_tokenizer(Tokenizer* t, char* tokenizer_path, int vocab_size) {
+void build_tokenizer(t, tokenizer_path, vocab_size)
+Tokenizer* t; char* tokenizer_path; int vocab_size; {
     // i should have written the vocab_size into the tokenizer file... sigh
     t->vocab_size = vocab_size;
     // malloc space to hold the scores and the strings
@@ -414,14 +432,16 @@ void build_tokenizer(Tokenizer* t, char* tokenizer_path, int vocab_size) {
     fclose(file);
 }
 
-void free_tokenizer(Tokenizer* t) {
+void free_tokenizer(t)
+Tokenizer* t; {
     for (int i = 0; i < t->vocab_size; i++) { free(t->vocab[i]); }
     free(t->vocab);
     free(t->vocab_scores);
     free(t->sorted_vocab);
 }
 
-char* decode(Tokenizer* t, int prev_token, int token) {
+char* decode(t, prev_token, token)
+Tokenizer* t; int prev_token; int token; {
     char *piece = t->vocab[token];
     // following BOS (1) token, sentencepiece decoder strips any leading whitespace (see PR #89)
     if (prev_token == 1 && piece[0] == ' ') { piece++; }
@@ -434,7 +454,8 @@ char* decode(Tokenizer* t, int prev_token, int token) {
     return piece;
 }
 
-void safe_printf(char *piece) {
+void safe_printf(piece)
+char *piece; {
     // piece might be a raw byte token, and we only want to print printable chars or whitespace
     // because some of the other bytes can be various control codes, backspace, etc.
     if (piece == NULL) { return; }
@@ -448,14 +469,16 @@ void safe_printf(char *piece) {
     printf("%s", piece);
 }
 
-int str_lookup(char *str, TokenIndex *sorted_vocab, int vocab_size) {
+int str_lookup(str, sorted_vocab, vocab_size)
+char *str; TokenIndex *sorted_vocab; int vocab_size; {
     // efficiently find the perfect match for str in vocab, return its index or -1 if not found
     TokenIndex tok = { .str = str }; // acts as the key to search for
     TokenIndex *res = bsearch(&tok, sorted_vocab, vocab_size, sizeof(TokenIndex), compare_tokens);
     return res != NULL ? res->id : -1;
 }
 
-void encode(Tokenizer* t, char *text, int8_t bos, int8_t eos, int *tokens, int *n_tokens) {
+void encode(t, text, bos, eos, tokens, n_tokens)
+Tokenizer* t; char *text; int8_t bos; int8_t eos; int *tokens; int *n_tokens; {
     // encode the string text (input) into an upper-bound preallocated tokens[] array
     // bos != 0 means prepend the BOS token (=1), eos != 0 means append the EOS token (=2)
     if (text == NULL) { fprintf(stderr, "cannot encode NULL text\n"); exit(EXIT_FAILURE); }
@@ -593,7 +616,8 @@ typedef struct {
     unsigned long long rng_state;
 } Sampler;
 
-int sample_argmax(float* probabilities, int n) {
+int sample_argmax(probabilities, n)
+float* probabilities; int n; {
     // return the index that has the highest probability
     int max_i = 0;
     float max_p = probabilities[0];
@@ -606,7 +630,8 @@ int sample_argmax(float* probabilities, int n) {
     return max_i;
 }
 
-int sample_mult(float* probabilities, int n, float coin) {
+int sample_mult(probabilities, n, coin)
+float* probabilities; int n; float coin; {
     // sample index from probabilities (they must sum to 1!)
     // coin is a random number in [0, 1), usually from random_f32()
     float cdf = 0.0f;
@@ -619,7 +644,8 @@ int sample_mult(float* probabilities, int n, float coin) {
     return n - 1; // in case of rounding errors
 }
 
-int compare(const void* a, const void* b) {
+int compare(a, b)
+const void* a; const void* b; {
     ProbIndex* a_ = (ProbIndex*) a;
     ProbIndex* b_ = (ProbIndex*) b;
     if (a_->prob > b_->prob) return -1;
@@ -627,7 +653,8 @@ int compare(const void* a, const void* b) {
     return 0;
 }
 
-int sample_topp(float* probabilities, int n, float topp, ProbIndex* probindex, float coin) {
+int sample_topp(probabilities, n, topp, probindex, coin)
+float* probabilities; int n; float topp; ProbIndex* probindex; float coin; {
     // top-p sampling (or "nucleus sampling") samples from the smallest set of
     // tokens that exceed probability topp. This way we never sample tokens that
     // have very low probabilities and are less likely to go "off the rails".
@@ -670,7 +697,8 @@ int sample_topp(float* probabilities, int n, float topp, ProbIndex* probindex, f
     return probindex[last_idx].index; // in case of rounding errors
 }
 
-void build_sampler(Sampler* sampler, int vocab_size, float temperature, float topp, unsigned long long rng_seed) {
+void build_sampler(sampler, vocab_size, temperature, topp, rng_seed)
+Sampler* sampler; int vocab_size; float temperature; float topp; unsigned long long rng_seed; {
     sampler->vocab_size = vocab_size;
     sampler->temperature = temperature;
     sampler->topp = topp;
@@ -679,22 +707,26 @@ void build_sampler(Sampler* sampler, int vocab_size, float temperature, float to
     sampler->probindex = malloc(sampler->vocab_size * sizeof(ProbIndex));
 }
 
-void free_sampler(Sampler* sampler) {
+void free_sampler(sampler)
+Sampler* sampler; {
     free(sampler->probindex);
 }
 
-unsigned int random_u32(unsigned long long *state) {
+unsigned int random_u32(state)
+unsigned long long *state; {
     // xorshift rng: https://en.wikipedia.org/wiki/Xorshift#xorshift.2A
     *state ^= *state >> 12;
     *state ^= *state << 25;
     *state ^= *state >> 27;
     return (*state * 0x2545F4914F6CDD1Dull) >> 32;
 }
-float random_f32(unsigned long long *state) { // random float32 in [0,1)
+float random_f32(state) // random float32 in [0,1)
+unsigned long long *state; {
     return (random_u32(state) >> 8) / 16777216.0f;
 }
 
-int sample(Sampler* sampler, float* logits) {
+int sample(sampler, logits)
+Sampler* sampler; float* logits; {
     // sample the token given the logits and some hyperparameters
     int next;
     if (sampler->temperature == 0.0f) {
@@ -732,7 +764,8 @@ long time_in_ms() {
 // ----------------------------------------------------------------------------
 // generation loop
 
-void generate(Transformer *transformer, Tokenizer *tokenizer, Sampler *sampler, char *prompt, int steps) {
+void generate(transformer, tokenizer, sampler, prompt, steps)
+Transformer *transformer; Tokenizer *tokenizer; Sampler *sampler; char *prompt; int steps; {
     char *empty_prompt = "";
     if (prompt == NULL) { prompt = empty_prompt; }
 
@@ -788,7 +821,8 @@ void generate(Transformer *transformer, Tokenizer *tokenizer, Sampler *sampler, 
     free(prompt_tokens);
 }
 
-void read_stdin(const char* guide, char* buffer, size_t bufsize) {
+void read_stdin(guide, buffer, bufsize)
+const char* guide; char* buffer; size_t bufsize; {
     // read a line from stdin, up to but not including \n
     printf("%s", guide);
     if (fgets(buffer, bufsize, stdin) != NULL) {
@@ -805,8 +839,10 @@ void read_stdin(const char* guide, char* buffer, size_t bufsize) {
 // python reference and that seemed ok, but this was not thoroughly tested and
 // is not safely implemented, it's more a proof of concept atm.
 
-void chat(Transformer *transformer, Tokenizer *tokenizer, Sampler *sampler,
-          char *cli_user_prompt, char *cli_system_prompt, int steps) {
+void chat(transformer, tokenizer, sampler,
+          cli_user_prompt, cli_system_prompt, steps)
+Transformer *transformer; Tokenizer *tokenizer; Sampler *sampler;
+          char *cli_user_prompt; char *cli_system_prompt; int steps; {
 
     // buffers for reading the system prompt and user prompt from stdin
     // you'll notice they are soomewhat haphazardly and unsafely set atm
@@ -909,7 +945,8 @@ void error_usage() {
     exit(EXIT_FAILURE);
 }
 
-int main(int argc, char *argv[]) {
+int main(argc, argv)
+int argc; char *argv[]; {
 
     // default parameters
     char *checkpoint_path = NULL;  // e.g. out/model.bin
