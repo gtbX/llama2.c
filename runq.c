@@ -1,19 +1,19 @@
 /* Inference for Llama-2 Transformer model in pure C, int8 quantized forward pass. */
 
 #include <stdio.h>
-#include <stdlib.h>
 #include <ctype.h>
-#include <stdint.h>
 #include <time.h>
 #include <math.h>
 #include <string.h>
 #include <fcntl.h>
 #if defined _WIN32
     #include "win.h"
-#else
+#elif !defined PLEXUS
+    #include <stdlib.h>
     #include <unistd.h>
     #include <sys/mman.h>
 #endif
+
 // ----------------------------------------------------------------------------
 // Globals
 int GS = 0; // group size global for quantization of the weights
