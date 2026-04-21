@@ -724,7 +724,7 @@ typedef struct {
     ProbIndex* probindex; // buffer used in top-p sampling
     float temperature;
     float topp;
-    unsigned long long rng_state;
+    unsigned long rng_state;
 } Sampler;
 
 int sample_argmax(probabilities, n)
@@ -809,7 +809,7 @@ float* probabilities; int n; float topp; ProbIndex* probindex; float coin; {
 }
 
 void build_sampler(sampler, vocab_size, temperature, topp, rng_seed)
-Sampler* sampler; int vocab_size; float temperature; float topp; unsigned long long rng_seed; {
+Sampler* sampler; int vocab_size; float temperature; float topp; unsigned long rng_seed; {
     sampler->vocab_size = vocab_size;
     sampler->temperature = temperature;
     sampler->topp = topp;
@@ -824,15 +824,15 @@ Sampler* sampler; {
 }
 
 unsigned int random_u32(state)
-unsigned long long *state; {
+unsigned long *state; {
     // xorshift rng: https://en.wikipedia.org/wiki/Xorshift#xorshift.2A
-    *state ^= *state >> 12;
-    *state ^= *state << 25;
-    *state ^= *state >> 27;
-    return (*state * 0x2545F4914F6CDD1Dull) >> 32;
+    *state ^= *state << 13;
+    *state ^= *state >> 17;
+    *state ^= *state << 05;
+    return *state * 1597334677U;
 }
 float random_f32(state)
-unsigned long long *state; { // random float32 in [0,1)
+unsigned long *state; { // random float32 in [0,1)
     return (random_u32(state) >> 8) / 16777216.0f;
 }
 
@@ -1066,7 +1066,7 @@ int argc; char **argv; {
     float topp = 0.9f;          // top-p in nucleus sampling. 1.0 = off. 0.9 works well, but slower
     int steps = 256;            // number of steps to run for
     char *prompt = NULL;        // prompt string
-    unsigned long long rng_seed = 0; // seed rng with time by default
+    unsigned long rng_seed = 0; // seed rng with time by default
     char *mode = "generate";    // generate|chat
     char *system_prompt = NULL; // the (optional) system prompt to use in chat mode
 
