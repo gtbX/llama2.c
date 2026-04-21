@@ -32,7 +32,7 @@ typedef struct {
 } Config;
 
 typedef struct {
-    int8_t* q;    // quantized values
+    char* q;    // quantized values
     float* s; // scaling factors
 } QuantizedTensor;
 
@@ -85,7 +85,7 @@ typedef struct {
     // some more state needed to properly clean up the memory mapping (sigh)
     int fd; // file descriptor for memory mapping
     float* data; // memory mapped data pointer
-    ssize_t file_size; // size of the checkpoint file in bytes
+    long file_size; // size of the checkpoint file in bytes
 } Transformer;
 
 void malloc_run_state(s, p)
@@ -97,8 +97,8 @@ RunState* s; Config* p; {
     s->xb2 = calloc(p->dim, sizeof(float));
     s->hb = calloc(p->hidden_dim, sizeof(float));
     s->hb2 = calloc(p->hidden_dim, sizeof(float));
-    s->xq = (QuantizedTensor) { .q = calloc(p->dim, sizeof(int8_t)), .s = calloc(p->dim, sizeof(float)) };
-    s->hq = (QuantizedTensor) { .q = calloc(p->hidden_dim, sizeof(int8_t)), .s = calloc(p->hidden_dim, sizeof(float)) };
+    s->xq = (QuantizedTensor) { .q = calloc(p->dim, sizeof(char)), .s = calloc(p->dim, sizeof(float)) };
+    s->hq = (QuantizedTensor) { .q = calloc(p->hidden_dim, sizeof(char)), .s = calloc(p->hidden_dim, sizeof(float)) };
     s->q = calloc(p->dim, sizeof(float));
     s->k = calloc(kv_dim, sizeof(float));
     s->v = calloc(kv_dim, sizeof(float));
@@ -168,7 +168,7 @@ QuantizedTensor *qx; float* x; int n; {
         // calculate and write the quantized values
         for (int i = 0; i < GS; i++) {
             float quant_value = x[group * GS + i] / scale; // scale
-            int8_t quantized = (int8_t) round(quant_value); // round and clamp
+            char quantized = (char) round(quant_value); // round and clamp
             qx->q[group * GS + i] = quantized;
         }
     }
@@ -181,8 +181,8 @@ void **ptr; int n; int size_each; {
     QuantizedTensor *res = malloc(n * sizeof(QuantizedTensor));
     for(int i=0; i<n; i++) {
         /* map quantized int8 values*/
-        res[i].q = (int8_t*)p;
-        p = (int8_t*)p + size_each;
+        res[i].q = (char*)p;
+        p = (char*)p + size_each;
         /* map scale factors */
         res[i].s = (float*)p;
         p = (float*)p + size_each / GS;
@@ -192,7 +192,7 @@ void **ptr; int n; int size_each; {
 }
 
 void memory_map_weights(w, p, ptr, shared_classifier)
-TransformerWeights *w; Config* p; void* ptr; uint8_t shared_classifier; {
+TransformerWeights *w; Config* p; void* ptr; char shared_classifier; {
     int head_size = p->dim / p->n_heads;
     // first are the parameters that are kept in fp32 (the rmsnorm (1D) weights)
     float* fptr = (float*) ptr; // cast our pointer to float*
@@ -225,12 +225,12 @@ TransformerWeights *w; Config* p; void* ptr; uint8_t shared_classifier; {
 void read_checkpoint(checkpoint, config, weights,
                      fd, data, file_size)
 char* checkpoint; Config* config; TransformerWeights* weights;
-                     int* fd; float** data; ssize_t* file_size; {
+                     int* fd; float** data; long* file_size; {
     FILE *file = fopen(checkpoint, "rb");
     if (!file) { fprintf(stderr, "Couldn't open file %s\n", checkpoint); exit(EXIT_FAILURE); }
     // read in magic number (uint32), has to be 0x616b3432, i.e. "ak42" in ASCII
-    uint32_t magic_number;
-    if (fread(&magic_number, sizeof(uint32_t), 1, file) != 1) { exit(EXIT_FAILURE); }
+    unsigned int magic_number;
+    if (fread(&magic_number, sizeof(unsigned int), 1, file) != 1) { exit(EXIT_FAILURE); }
     if (magic_number != 0x616b3432) { fprintf(stderr, "Bad magic number\n"); exit(EXIT_FAILURE); }
     // read in the version number (uint32), has to be 2
     int version;
@@ -240,8 +240,8 @@ char* checkpoint; Config* config; TransformerWeights* weights;
     // read in the Config
     if (fread(config, sizeof(Config), 1, file) != 1) { exit(EXIT_FAILURE); }
     // read in flags
-    uint8_t shared_classifier; // a byte to indicate if the classifier is shared
-    if (fread(&shared_classifier, sizeof(uint8_t), 1, file) != 1) { exit(EXIT_FAILURE); }
+    char shared_classifier; // a byte to indicate if the classifier is shared
+    if (fread(&shared_classifier, sizeof(char), 1, file) != 1) { exit(EXIT_FAILURE); }
     int group_size; // the group size used in quantization
     if (fread(&group_size, sizeof(int), 1, file) != 1) { exit(EXIT_FAILURE); }
     GS = group_size; // set as global, as it will be used in many places
@@ -337,14 +337,14 @@ float* xout; QuantizedTensor *x; QuantizedTensor *w; int n; int d; {
     for (i = 0; i < d; i++) {
 
         float val = 0.0f;
-        int32_t ival = 0;
+        int ival = 0;
         int in = i * n;
 
         // do the matmul in groups of GS
         int j;
         for (j = 0; j <= n - GS; j += GS) {
             for (int k = 0; k < GS; k++) {
-                ival += ((int32_t) x->q[j + k]) * ((int32_t) w->q[in + j + k]);
+                ival += ((int) x->q[j + k]) * ((int) w->q[in + j + k]);
             }
             val += ((float) ival) * w->s[(in + j) / GS] * x->s[j / GS];
             ival = 0;
@@ -589,7 +589,7 @@ char *str; TokenIndex *sorted_vocab; int vocab_size; {
 }
 
 void encode(t, text, bos, eos, tokens, n_tokens)
-Tokenizer* t; char *text; int8_t bos; int8_t eos; int *tokens; int *n_tokens; {
+Tokenizer* t; char *text; char bos; char eos; int *tokens; int *n_tokens; {
     // encode the string text (input) into an upper-bound preallocated tokens[] array
     // bos != 0 means prepend the BOS token (=1), eos != 0 means append the EOS token (=2)
     if (text == NULL) { fprintf(stderr, "cannot encode NULL text\n"); exit(EXIT_FAILURE); }
@@ -607,7 +607,7 @@ Tokenizer* t; char *text; int8_t bos; int8_t eos; int *tokens; int *n_tokens; {
     // create a temporary buffer that will store merge candidates of always two consecutive tokens
     // *2 for concat, +1 for null terminator +2 for UTF8 (in case max_token_length is 1)
     char* str_buffer = malloc((t->max_token_length*2 +1 +2) * sizeof(char));
-    size_t str_len = 0;
+    unsigned long str_len = 0;
 
     // start at 0 tokens
     *n_tokens = 0;
@@ -933,11 +933,11 @@ Transformer *transformer; Tokenizer *tokenizer; Sampler *sampler; char *prompt; 
 }
 
 void read_stdin(guide, buffer, bufsize)
-const char* guide; char* buffer; size_t bufsize; {
+const char* guide; char* buffer; unsigned long bufsize; {
     // read a line from stdin, up to but not including \n
     printf("%s", guide);
     if (fgets(buffer, bufsize, stdin) != NULL) {
-        size_t len = strlen(buffer);
+        unsigned long len = strlen(buffer);
         if (len > 0 && buffer[len - 1] == '\n') {
             buffer[len - 1] = '\0'; // strip newline
         }
@@ -965,7 +965,7 @@ Transformer *transformer; Tokenizer *tokenizer; Sampler *sampler;
     int user_idx;
 
     // start the main loop
-    int8_t user_turn = 1; // user starts
+    char user_turn = 1; // user starts
     int next;        // will store the next token in the sequence
     int token;       // stores the current token to feed into the transformer
     int prev_token;
